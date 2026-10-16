@@ -9,6 +9,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -74,6 +77,18 @@ jobs:
           name: kris-app-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
+      - name: APK를 릴리스로 발행(발주자 다운로드용)
+        if: steps.build.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk kris-app.apk
+          gh release delete app-latest -y --cleanup-tag 2>/dev/null || true
+          gh release create app-latest kris-app.apk \
+            --title "크리스 앱 최신 APK" \
+            --notes "① WebView 껍데기 — 폰에 설치해 테스트용. 커밋 ${{ github.sha }}" \
+            --latest
 
       - name: 빌드 실패 시 에러를 주석으로 노출
         if: steps.build.outcome != 'success'
