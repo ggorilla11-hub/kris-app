@@ -25,6 +25,8 @@ jobs:
       - name: Flutter 설치
         uses: subosito/flutter-action@v2
         with:
+          # flutter_inappwebview 6.1.x 와 호환되는 Gradle/AGP 조합으로 고정
+          flutter-version: '3.24.5'
           channel: stable
 
       - name: 내 소스 백업
