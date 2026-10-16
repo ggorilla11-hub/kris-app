@@ -58,7 +58,10 @@ jobs:
           add_perm android.permission.POST_NOTIFICATIONS
           add_perm android.permission.RECEIVE_BOOT_COMPLETED
           sed -i 's#android:label="[^"]*"#android:label="크리스"#' "$MF"
-          echo "----- Manifest -----"; sed -n '1,20p' "$MF"
+          # ★알림 읽기 서비스(NotificationListenerService) 선언 — ★이게 있어야 "알림 접근 허용" 목록에 크리스가 뜬다 (2026-10-17 팀장)
+          grep -q NotificationsHandlerService "$MF" || sed -i 's#</application>#    <service android:name="com.akhilg.flutter_notification_listener_plus.NotificationsHandlerService" android:label="크리스 알림 수집" android:exported="true" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="customer-message-collection"/><intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter></service></application>#' "$MF"
+          echo "----- Manifest -----"; sed -n '1,30p' "$MF"
+          echo "----- service 확인 -----"; grep -n "NotificationsHandlerService\|BIND_NOTIFICATION_LISTENER" "$MF" || echo "★★service 없음(빌드 실패로 간주)"
           # minSdk 23 (secure_storage·notification listener 호환)
           AG=android/app/build.gradle
           sed -i 's#minSdkVersion flutter.minSdkVersion#minSdkVersion 23#' "$AG" 2>/dev/null || true
