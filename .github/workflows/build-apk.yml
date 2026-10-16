@@ -45,12 +45,26 @@ jobs:
           cp /tmp/pubspec.yaml pubspec.yaml
           cp /tmp/main.dart lib/main.dart
 
-      - name: 매니페스트 패치 (인터넷 권한 + 앱이름)
+      - name: 안드로이드 설정 패치 (권한 + 앱이름 + minSdk)
         run: |
           MF=android/app/src/main/AndroidManifest.xml
-          grep -q 'android.permission.INTERNET' "$MF" || \
-            sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' "$MF"
+          add_perm() {
+            grep -q "\"$1\"" "$MF" || \
+              sed -i "s#<application#<uses-permission android:name=\"$1\"/>\n    <application#" "$MF"
+          }
+          add_perm android.permission.INTERNET
+          add_perm android.permission.FOREGROUND_SERVICE
+          add_perm android.permission.FOREGROUND_SERVICE_DATA_SYNC
+          add_perm android.permission.POST_NOTIFICATIONS
+          add_perm android.permission.RECEIVE_BOOT_COMPLETED
           sed -i 's#android:label="[^"]*"#android:label="크리스"#' "$MF"
+          echo "----- Manifest -----"; sed -n '1,20p' "$MF"
+          # minSdk 23 (secure_storage·notification listener 호환)
+          AG=android/app/build.gradle
+          sed -i 's#minSdkVersion flutter.minSdkVersion#minSdkVersion 23#' "$AG" 2>/dev/null || true
+          sed -i 's#minSdk = flutter.minSdkVersion#minSdk = 23#' "$AG" 2>/dev/null || true
+          sed -i 's#minSdk flutter.minSdkVersion#minSdk 23#' "$AG" 2>/dev/null || true
+          echo "----- build.gradle minSdk -----"; grep -n "minSdk" "$AG" || true
 
       - name: 의존성 받기
         run: flutter pub get
