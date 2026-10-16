@@ -79,7 +79,11 @@ jobs:
           echo "----- build.log tail -----"
           tail -60 /tmp/build.log || true
           echo "----- 핵심 에러를 annotation으로 -----"
-          grep -iE "what went wrong|execution failed|caused by|^error|error:|> could not|> task|minsdk|compilesdk|sdk version|requires|namespace|kotlin version|aapt|androidmanifest|ndk|unresolved|not found" /tmp/build.log \
-            | grep -ivE "warning|deprecat" | tail -10 \
+          # 진행바(\r)·다운로드 잡음 제거
+          sed 's/\r/\n/g' /tmp/build.log \
+            | grep -vaiE "unzipping|downloading|%\]|^\[|^\s*$" > /tmp/clean.log || true
+          # 'What went wrong' / 'FAILURE' 블록을 문맥째로
+          grep -aA 10 -E "What went wrong|FAILURE:|Execution failed|Caused by" /tmp/clean.log \
+            | head -16 \
             | while IFS= read -r l; do echo "::error::${l}"; done
           exit 1
