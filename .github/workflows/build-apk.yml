@@ -117,4 +117,8 @@ jobs:
           grep -aA 10 -E "What went wrong|FAILURE:|Execution failed|Caused by" /tmp/clean.log \
             | head -16 \
             | while IFS= read -r l; do echo "::error::${l}"; done
+          # Kotlin/Java 컴파일 에러 줄(e:, .kt, error:)도 노출
+          grep -aE "^e: |\.kt:|error:|unresolved|only available since|incompatible|requires newer|Unresolved reference" /tmp/clean.log \
+            | grep -ivE "warning|note:" | head -10 \
+            | while IFS= read -r l; do echo "::error::KT ${l}"; done
           exit 1
