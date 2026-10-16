@@ -114,11 +114,10 @@ jobs:
           sed 's/\r/\n/g' /tmp/build.log \
             | grep -vaiE "unzipping|downloading|%\]|^\[|^\s*$" > /tmp/clean.log || true
           # 'What went wrong' / 'FAILURE' 블록을 문맥째로
-          grep -aA 10 -E "What went wrong|FAILURE:|Execution failed|Caused by" /tmp/clean.log \
-            | head -16 \
-            | while IFS= read -r l; do echo "::error::${l}"; done
-          # Kotlin/Java 컴파일 에러 줄(e:, .kt, error:)도 노출
-          grep -aE "^e: |\.kt:|error:|unresolved|only available since|incompatible|requires newer|Unresolved reference" /tmp/clean.log \
-            | grep -ivE "warning|note:" | head -10 \
+          # ★컴파일 에러를 먼저(가장 유용), GitHub는 스텝당 주석 10개 제한
+          grep -aE "^e: |\.kt:|\.java:|error:|unresolved|only available since|incompatible|requires|This version of|was compiled with" /tmp/clean.log \
+            | grep -aivE "warning|note:|--warning|deprecat" | head -7 \
             | while IFS= read -r l; do echo "::error::KT ${l}"; done
+          grep -aA 3 -E "What went wrong" /tmp/clean.log | head -3 \
+            | while IFS= read -r l; do echo "::error::${l}"; done
           exit 1
