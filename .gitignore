@@ -1,0 +1,26 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# Android (CI가 생성하는 스캐폴딩 — 소스에는 안 담음)
+android/
+ios/
+linux/
+macos/
+windows/
+web/
+.idea/
+*.iml
+.gradle/
+local.properties
+key.properties
+*.keystore
+*.jks
+
+# OS
+.DS_Store
+Thumbs.db

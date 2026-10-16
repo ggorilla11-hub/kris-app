@@ -1,0 +1,61 @@
+name: build-apk
+
+# 크리스 앱 APK 빌드 (깃허브 서버에서 Flutter/안드로이드 SDK로 빌드)
+# push 때마다, 또는 수동 실행(Actions 탭 Run workflow)으로 APK를 만든다.
+# 결과물: Actions 실행 > Artifacts > kris-app-apk (app-release.apk)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 자바(JDK 17) 설치
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Flutter 설치
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: 내 소스 백업
+        run: |
+          cp pubspec.yaml /tmp/pubspec.yaml
+          cp lib/main.dart /tmp/main.dart
+
+      - name: 안드로이드 스캐폴딩 생성
+        run: flutter create --platforms=android --org com.ohwantbalance --project-name kris_app .
+
+      - name: 내 소스 복원
+        run: |
+          cp /tmp/pubspec.yaml pubspec.yaml
+          cp /tmp/main.dart lib/main.dart
+
+      - name: 매니페스트 패치 (인터넷 권한 + 앱이름)
+        run: |
+          MF=android/app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.INTERNET' "$MF" || \
+            sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' "$MF"
+          sed -i 's#android:label="[^"]*"#android:label="크리스"#' "$MF"
+
+      - name: 의존성 받기
+        run: flutter pub get
+
+      - name: APK 빌드(release)
+        run: flutter build apk --release
+
+      - name: APK 업로드(Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: kris-app-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
