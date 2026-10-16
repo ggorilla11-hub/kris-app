@@ -51,11 +51,30 @@ jobs:
         run: flutter pub get
 
       - name: APK 빌드(release)
-        run: flutter build apk --release
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          flutter build apk --release 2>&1 | tee /tmp/build.log
+
+      - name: 빌드 로그 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/build.log
+          if-no-files-found: warn
 
       - name: APK 업로드(Artifact)
+        if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: kris-app-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
+      - name: 빌드 실패 시 작업 실패 처리
+        if: steps.build.outcome != 'success'
+        run: |
+          echo "APK 빌드 실패 — build-log 아티팩트 참조"
+          exit 1
