@@ -81,6 +81,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
   String? _ikey;
   bool _ikeyLoaded = false;
   bool _hasNotifPermission = true; // 배너 숨김 기본값, 실제값은 비동기로 갱신
+  DateTime? _lastIssueAt; // ikey 발급 호출 스로틀
 
   // 중복 전송 방지(최근 200건 키)
   final Set<String> _seen = <String>{};
@@ -161,7 +162,8 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
 
     final sender = (evt.title ?? '').trim();
     final body = (evt.text ?? '').trim();
-    if (body.isEmpty) return; // 요약 알림·빈 알림은 건너뜀
+    if (body.isEmpty) return; // 빈 알림은 건너뜀
+    if (_isNoise(changuk, body)) return; // 요약·그룹·광고성 노이즈 제외(1:1 위주)
 
     // 중복 제거(앱+보낸이+본문+분 단위 시각)
     final minute = (evt.createAt ?? DateTime.now())
@@ -185,11 +187,30 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
           'Content-Type': 'application/json; charset=utf-8',
           'x-inbox-token': ik,
         },
-        body: jsonEncode({'창구': changuk, '보낸이': sender, '본문': body}),
+        body: jsonEncode({
+          '창구': changuk,
+          '보낸이': sender,
+          '본문': body,
+          // 폰에 쌓였다 늦게 보내도 시각이 정확하도록 함께 전송(선택)
+          '받은때': (evt.createAt ?? DateTime.now()).toUtc().toIso8601String(),
+        }),
       );
     } catch (_) {
       // 네트워크 실패는 조용히 무시(다음 알림에서 재시도)
     }
+  }
+
+  // 수집에서 뺄 노이즈 판별 (요약 알림 · 카톡 그룹/오픈채팅 · 광고성)
+  bool _isNoise(String changuk, String body) {
+    // "3개의 메시지", "안 읽은 메시지 N개", "새로운 메시지" 류 요약
+    if (RegExp(r'\d+\s*개의?\s*(새\s*)?메시지').hasMatch(body)) return true;
+    if (body.contains('읽지 않은') || body.contains('안 읽은') ||
+        body.contains('새로운 메시지')) return true;
+    // 카톡 그룹·오픈채팅은 본문이 "보낸이 : 내용" 형태 → 1:1 위주로 제외
+    if (changuk == 'kakao' && RegExp(r'^[^\s:]{1,20}\s?:\s').hasMatch(body)) {
+      return true;
+    }
+    return false;
   }
 
   Future<bool> _handleBack() async {
@@ -258,8 +279,15 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
                   },
                   onLoadStop: (c, url) async {
                     _pull?.endRefreshing();
-                    // ★저장된 ikey가 없을 때만 발급 요청(매번 부르면 옛 열쇠가 막힘)
-                    if (_ikeyLoaded && _ikey == null) {
+                    // ★로그인·메인 로드 후에만 발급 — 크리스 서버 화면에서, 저장된 ikey 없을 때만.
+                    // 로그인 전/다른 호스트(구글 로그인 등)에선 호출 안 함.
+                    // (서버는 로그인 전 호출 시 401로 조용히 실패하고 열쇠를 안 줌 → 다음 로드 때 재시도)
+                    final host = url?.host ?? '';
+                    final onKris = host.endsWith('genya-pwa.onrender.com');
+                    final throttled = _lastIssueAt != null &&
+                        DateTime.now().difference(_lastIssueAt!).inSeconds < 8;
+                    if (_ikeyLoaded && _ikey == null && onKris && !throttled) {
+                      _lastIssueAt = DateTime.now();
                       await c.evaluateJavascript(
                         source:
                             "window.genyaIssueIkey && window.genyaIssueIkey();",
