@@ -73,8 +73,13 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
-      - name: 빌드 실패 시 작업 실패 처리
+      - name: 빌드 실패 시 에러를 주석으로 노출
         if: steps.build.outcome != 'success'
         run: |
-          echo "APK 빌드 실패 — build-log 아티팩트 참조"
+          echo "----- build.log tail -----"
+          tail -60 /tmp/build.log || true
+          echo "----- 핵심 에러를 annotation으로 -----"
+          grep -iE "what went wrong|execution failed|caused by|^error|error:|> could not|> task|minsdk|compilesdk|sdk version|requires|namespace|kotlin version|aapt|androidmanifest|ndk|unresolved|not found" /tmp/build.log \
+            | grep -ivE "warning|deprecat" | tail -10 \
+            | while IFS= read -r l; do echo "::error::${l}"; done
           exit 1
