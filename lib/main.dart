@@ -260,6 +260,11 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
                     useOnDownloadStart: true,
                     mediaPlaybackRequiresUserGesture: false,
                     supportZoom: false,
+                    // ★2026-10-18 구글 로그인 「403 disallowed_useragent」 막기 — 안드 WebView UA 에 붙는 "; wv" 를
+                    //   구글이 보고 임베디드 브라우저로 판정해 OAuth 를 거부한다. 일반 크롬 모바일 UA 로 바꿔 보낸다.
+                    //   (내용은 그대로 웹, 서버 코드 변화 없음. 되돌리기 = 이 줄 삭제)
+                    userAgent:
+                        'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
                     transparentBackground: true,
                     javaScriptCanOpenWindowsAutomatically: true,
                     allowsInlineMediaPlayback: true,
