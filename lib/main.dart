@@ -22,7 +22,7 @@ import 'package:workmanager/workmanager.dart';
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.3.5';
+const String kAppVer = '0.3.6';
 // ★판 279e LITE(교육생판)는 알림 수집이 없어 「알림 접근 허용」 띠가 영영 안 사라지던 것 — LITE 빌드에서는 띠를 안 그림
 const bool kLite = bool.fromEnvironment('KRIS_LITE');
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
@@ -70,7 +70,7 @@ Future<bool> callScanGranted() async {
   }
 }
 
-Future<bool> callScanOnce() async {
+Future<bool> callScanOnce({bool again = true}) async {
   const st = FlutterSecureStorage();
   final granted = await callScanGranted();
   try {
@@ -136,11 +136,20 @@ Future<bool> callScanOnce() async {
       if (seen.length > 600) seen = seen.sublist(seen.length - 500);
       try { await st.write(key: kCallSeenKey, value: jsonEncode(seen)); } catch (_) {}
       try {
-        await http.post(
+        final rs = await http.post(
           Uri.parse('$kBaseUrl/api/inbox/call-status'),
           headers: {'Content-Type': 'application/json; charset=utf-8', 'x-inbox-token': ik!},
           body: jsonEncode({'권한': granted, '폴더': folder, '파일수': files.length, '새': sent, '앱판': kAppVer}),
         ).timeout(const Duration(seconds: 20));
+        // ★판 279i 서버가 「처음부터 다시」라 하면(통화 리스닝이 꺼져 있던 동안 본 것으로 적힌 녹음) 지난 하루치를 다시 보냄
+        try {
+          final jr = jsonDecode(utf8.decode(rs.bodyBytes));
+          if (jr is Map && jr['다시'] == true) {
+            await st.write(key: kCallSeenKey, value: '[]');
+            await st.write(key: kCallSinceKey, value: '${DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch}');
+            if (again) return await callScanOnce(again: false);
+          }
+        } catch (_) {}
       } catch (_) {}
   } catch (_) {}
   return granted;
