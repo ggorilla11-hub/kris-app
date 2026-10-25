@@ -32,6 +32,16 @@ jobs:
           flutter-version: '3.24.5'
           channel: stable
 
+      - name: 폰 문자 플러그인 만들기 (★판 298 — 설계사 폰 번호로 문자, native/KrisSmsPlugin.kt)
+        run: |
+          flutter create --template=plugin --platforms=android --org com.ohwantbalance --project-name kris_sms packages/kris_sms
+          rm -rf packages/kris_sms/example packages/kris_sms/test
+          F=$(find packages/kris_sms/android -name 'KrisSmsPlugin.kt' | head -1)
+          echo "플러그인 파일: $F"
+          [ -n "$F" ] || { echo "::error::KrisSmsPlugin.kt 뼈대를 못 찾음"; exit 1; }
+          cp native/KrisSmsPlugin.kt "$F"
+          grep -n "pluginClass\|package:" packages/kris_sms/pubspec.yaml
+
       - name: 내 소스 백업
         run: |
           cp pubspec.yaml /tmp/pubspec.yaml
@@ -59,6 +69,7 @@ jobs:
           add_perm android.permission.RECEIVE_BOOT_COMPLETED
           add_perm android.permission.READ_MEDIA_AUDIO
           add_perm android.permission.READ_EXTERNAL_STORAGE
+          add_perm android.permission.SEND_SMS
           sed -i 's#android:label="[^"]*"#android:label="크리스"#' "$MF"
           # ★알림 읽기 서비스(NotificationListenerService) 선언 — ★이게 있어야 "알림 접근 허용" 목록에 크리스가 뜬다 (2026-10-17 팀장)
           grep -q NotificationsHandlerService "$MF" || sed -i 's#</application>#    <service android:name="com.akhilg.flutter_notification_listener_plus.NotificationsHandlerService" android:label="크리스 알림 수집" android:exported="true" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="customer-message-collection"/><intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter></service></application>#' "$MF"

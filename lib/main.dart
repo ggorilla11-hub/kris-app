@@ -22,7 +22,7 @@ import 'package:workmanager/workmanager.dart';
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.3.9';
+const String kAppVer = '0.4.0';
 // ★판 279e LITE(교육생판)는 알림 수집이 없어 「알림 접근 허용」 띠가 영영 안 사라지던 것 — LITE 빌드에서는 띠를 안 그림
 const bool kLite = bool.fromEnvironment('KRIS_LITE');
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
@@ -192,6 +192,51 @@ Future<bool> callScanOnce({bool again = true}) async {
   return granted;
 }
 
+// ★판 298 폰 문자 — 설계사가 크리스에서 승인한 고객 문자를 ★이 폰 번호로 보냄(문자 회사 열쇠 필요 없음)
+const MethodChannel kSmsCh = MethodChannel('kris_sms');
+String _smsHelloLast = '';
+DateTime? _smsHelloAt;
+
+Future<bool> smsGranted() async {
+  try { return (await kSmsCh.invokeMethod<bool>('granted')) ?? false; } catch (_) { return false; }
+}
+
+Future<bool> smsSendOnce() async {
+  const st = FlutterSecureStorage();
+  String? ik;
+  try { ik = await st.read(key: kIkeyKey); } catch (_) {}
+  final granted = await smsGranted();
+  if (ik == null) return granted;
+  final h = {'Content-Type': 'application/json; charset=utf-8', 'x-inbox-token': ik};
+  // 허용 상태를 서버에 알림(바뀌었을 때·30분마다)
+  final now = DateTime.now();
+  if (_smsHelloLast != '$granted' || _smsHelloAt == null || now.difference(_smsHelloAt!).inMinutes >= 30) {
+    try {
+      await http.post(Uri.parse('$kBaseUrl/api/phone/sms-hello'), headers: h, body: jsonEncode({'권한': granted, '앱판': kAppVer})).timeout(const Duration(seconds: 15));
+      _smsHelloLast = '$granted'; _smsHelloAt = now;
+    } catch (_) {}
+  }
+  if (!granted) return granted;
+  try {
+    final r = await http.get(Uri.parse('$kBaseUrl/api/phone/sms-next'), headers: h).timeout(const Duration(seconds: 20));
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final list = (j is Map && j['문자'] is List) ? (j['문자'] as List) : const [];
+    for (final m in list) {
+      if (m is! Map) continue;
+      Map res;
+      try {
+        final x = await kSmsCh.invokeMethod('send', {'to': '${m['to'] ?? ''}', 'body': '${m['body'] ?? ''}'});
+        res = (x is Map) ? Map.from(x) : {'ok': false, 'err': '응답 없음'};
+      } catch (e) { res = {'ok': false, 'err': '$e'}; }
+      try {
+        await http.post(Uri.parse('$kBaseUrl/api/phone/sms-done'), headers: h,
+          body: jsonEncode({'id': m['id'], 'ok': res['ok'] == true, 'err': '${res['err'] ?? ''}'})).timeout(const Duration(seconds: 20));
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return granted;
+}
+
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, input) async {
@@ -200,6 +245,9 @@ void callbackDispatcher() {
     } catch (_) {}
     try {
       await callScanOnce().timeout(const Duration(minutes: 9));
+    } catch (_) {}
+    try {
+      await smsSendOnce().timeout(const Duration(minutes: 3));
     } catch (_) {}
     return true;
   });
@@ -258,6 +306,9 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
   bool _hasCallPermission = true; // ★판 279 통화녹음 읽기 권한
   bool _callBusy = false;
   Timer? _callTimer;
+  bool _hasSmsPermission = true; // ★판 298 문자 보내기 권한
+  bool _smsBusy = false;
+  Timer? _smsTimer;
   DateTime? _lastIssueAt; // ikey 발급 호출 스로틀
 
   // 중복 전송 방지(최근 200건 키)
@@ -297,6 +348,29 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
     // ★판 279 통화녹음 — 열 때 한 번 + 10분마다
     _scanCalls();
     _callTimer = Timer.periodic(const Duration(minutes: 10), (_) => _scanCalls());
+    // ★판 298 폰 문자 — 열 때 + 30초마다(앱이 열려 있는 동안 승인한 문자가 바로 나가게)
+    _sendSms();
+    _smsTimer = Timer.periodic(const Duration(seconds: 30), (_) => _sendSms());
+  }
+
+  Future<void> _sendSms() async {
+    if (_smsBusy) return;
+    _smsBusy = true;
+    try {
+      final granted = await smsSendOnce();
+      if (mounted && granted != _hasSmsPermission) setState(() => _hasSmsPermission = granted);
+    } catch (_) {
+    } finally {
+      _smsBusy = false;
+    }
+  }
+
+  Future<void> _askSmsPermission() async {
+    try {
+      final st = await Permission.sms.request();
+      if (!st.isGranted && (st.isPermanentlyDenied || st.isRestricted)) await openAppSettings();
+    } catch (_) {}
+    _sendSms();
   }
 
   // ── ★판 279 통화 리스닝: 통화녹음 폴더의 새 파일을 크리스 서버로 (서버가 글로 바꾸고 원본은 지움) ──
@@ -358,6 +432,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
         if (mounted) setState(() {});
       });
       _scanCalls();
+      _sendSms();
     }
   }
 
@@ -443,6 +518,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _callTimer?.cancel();
+    _smsTimer?.cancel();
     IsolateNameServer.removePortNameMapping(kPortName);
     _port.close();
     super.dispose();
@@ -461,6 +537,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
         body: SafeArea(
           child: Column(
             children: [
+              if (!_hasSmsPermission) _smsBanner(),
               if (!_hasCallPermission) _callBanner(),
               if (!kLite && !_hasNotifPermission) _permissionBanner(),
               if (_progress < 1.0)
@@ -500,6 +577,14 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
                         return {'ok': true};
                       },
                     );
+                    // ★판 298 웹에서 「발송해」 뒤 바로 폰 문자 보내기
+                    c.addJavaScriptHandler(
+                      handlerName: 'krisSmsNow',
+                      callback: (args) {
+                        _sendSms();
+                        return {'ok': true};
+                      },
+                    );
                   },
                   onLoadStop: (c, url) async {
                     _pull?.endRefreshing();
@@ -526,6 +611,31 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
                   onReceivedError: (c, req, err) => _pull?.endRefreshing(),
                 ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _smsBanner() {
+    return Material(
+      color: const Color(0xFFBFDBFE),
+      child: InkWell(
+        onTap: _askSmsPermission,
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(Icons.sms, color: Color(0xFF0C162E), size: 20),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '문자 보내기 허용 — 내가 승인한 고객 문자를 크리스가 내 번호로 보내요 (눌러서 허용)',
+                  style: TextStyle(color: Color(0xFF0C162E), fontWeight: FontWeight.w700, fontSize: 13),
+                ),
+              ),
+              Icon(Icons.chevron_right, color: Color(0xFF0C162E)),
             ],
           ),
         ),
