@@ -17,11 +17,12 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_notification_listener_plus/flutter_notification_listener_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:workmanager/workmanager.dart';
 
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.3.4';
+const String kAppVer = '0.3.5';
 // ★판 279e LITE(교육생판)는 알림 수집이 없어 「알림 접근 허용」 띠가 영영 안 사라지던 것 — LITE 빌드에서는 띠를 안 그림
 const bool kLite = bool.fromEnvironment('KRIS_LITE');
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
@@ -57,8 +58,120 @@ void _onNotification(NotificationEvent evt) {
   send?.send(evt);
 }
 
+
+// ★판 279g 통화녹음 훑기 — 앱 화면(열 때·10분마다)과 ★안드로이드 정기 작업(앱이 닫혀도 약 15분마다)이 함께 씀
+Future<bool> callScanGranted() async {
+  try {
+    if (await Permission.audio.isGranted) return true;
+    if (await Permission.storage.isGranted) return true;
+    return false;
+  } catch (_) {
+    return true; // 백그라운드에서 권한을 못 물으면 폴더를 직접 읽어 본다
+  }
+}
+
+Future<bool> callScanOnce() async {
+  const st = FlutterSecureStorage();
+  final granted = await callScanGranted();
+  try {
+      String? ik;
+      try { ik = await st.read(key: kIkeyKey); } catch (_) {}
+      if (ik == null) return granted;
+      String folder = '';
+      List<File> files = [];
+      if (granted) {
+        for (final d in kCallDirs) {
+          final dir = Directory(d);
+          try {
+            if (!await dir.exists()) continue;
+            final list = await dir.list().where((e) => e is File).cast<File>().where((f) => RegExp(r'\.(m4a|amr|mp3|3gp|aac|wav|ogg)$', caseSensitive: false).hasMatch(f.path)).toList();
+            if (list.isEmpty && folder.isNotEmpty) continue;
+            folder = d;
+            files = list;
+            if (list.isNotEmpty) break;
+          } catch (_) {}
+        }
+      }
+      // 처음 켤 때는 지난 하루치부터
+      int since = 0;
+      try { since = int.tryParse(await st.read(key: kCallSinceKey) ?? '') ?? 0; } catch (_) {}
+      if (since == 0 && granted) {
+        since = DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch;
+        try { await st.write(key: kCallSinceKey, value: '$since'); } catch (_) {}
+      }
+      List<String> seen = [];
+      try { seen = List<String>.from(jsonDecode(await st.read(key: kCallSeenKey) ?? '[]')); } catch (_) {}
+      final fresh = <File>[];
+      for (final f in files) {
+        try {
+          final m = (await f.lastModified()).millisecondsSinceEpoch;
+          final name = f.uri.pathSegments.last;
+          if (m >= since && !seen.contains(name)) fresh.add(f);
+        } catch (_) {}
+      }
+      // ★판 279f 방금 한 통화가 먼저 — 최신부터 한 번에 10개
+      fresh.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+      int sent = 0;
+      for (final f in fresh.take(10)) {
+        // 아직 녹음 중일 수 있는 파일(1분 안에 바뀐 것)은 다음 번에
+        if (DateTime.now().difference(f.lastModifiedSync()).inSeconds < 60) continue;
+        final name = f.uri.pathSegments.last;
+        try {
+          final len = await f.length();
+          if (len > 75 * 1024 * 1024) { seen.add(name); continue; }
+          final bytes = await f.readAsBytes();
+          final r = await http.post(
+            Uri.parse('$kBaseUrl/api/inbox/call-audio'),
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'x-inbox-token': ik!,
+              'x-call-file': Uri.encodeComponent(name),
+              'x-call-at': Uri.encodeComponent(f.lastModifiedSync().toUtc().toIso8601String()),
+            },
+            body: bytes,
+          ).timeout(const Duration(minutes: 5));
+          if (r.statusCode == 200) { seen.add(name); sent++; }
+        } catch (_) {}
+      }
+      if (seen.length > 600) seen = seen.sublist(seen.length - 500);
+      try { await st.write(key: kCallSeenKey, value: jsonEncode(seen)); } catch (_) {}
+      try {
+        await http.post(
+          Uri.parse('$kBaseUrl/api/inbox/call-status'),
+          headers: {'Content-Type': 'application/json; charset=utf-8', 'x-inbox-token': ik!},
+          body: jsonEncode({'권한': granted, '폴더': folder, '파일수': files.length, '새': sent, '앱판': kAppVer}),
+        ).timeout(const Duration(seconds: 20));
+      } catch (_) {}
+  } catch (_) {}
+  return granted;
+}
+
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((task, input) async {
+    try {
+      DartPluginRegistrant.ensureInitialized();
+    } catch (_) {}
+    try {
+      await callScanOnce().timeout(const Duration(minutes: 9));
+    } catch (_) {}
+    return true;
+  });
+}
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // ★판 279g 앱이 닫혀 있어도 약 15분마다 통화녹음을 올림(안드로이드가 정한 가장 짧은 간격)
+  try {
+    Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
+    Workmanager().registerPeriodicTask(
+      'kris-call-scan',
+      'callScan',
+      frequency: const Duration(minutes: 15),
+      existingWorkPolicy: ExistingWorkPolicy.keep,
+      constraints: Constraints(networkType: NetworkType.connected),
+    );
+  } catch (_) {}
   runApp(const KrisApp());
 }
 
@@ -167,79 +280,13 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
     if (_callBusy) return;
     _callBusy = true;
     try {
-      final granted = await _callGranted();
+      final granted = await callScanOnce();
       if (mounted && granted != _hasCallPermission) setState(() => _hasCallPermission = granted);
-      final ik = _ikey;
-      if (ik == null) return;
-      String folder = '';
-      List<File> files = [];
-      if (granted) {
-        for (final d in kCallDirs) {
-          final dir = Directory(d);
-          try {
-            if (!await dir.exists()) continue;
-            final list = await dir.list().where((e) => e is File).cast<File>().where((f) => RegExp(r'\.(m4a|amr|mp3|3gp|aac|wav|ogg)$', caseSensitive: false).hasMatch(f.path)).toList();
-            if (list.isEmpty && folder.isNotEmpty) continue;
-            folder = d;
-            files = list;
-            if (list.isNotEmpty) break;
-          } catch (_) {}
-        }
-      }
-      // 처음 켤 때는 지난 하루치부터
-      int since = 0;
-      try { since = int.tryParse(await _storage.read(key: kCallSinceKey) ?? '') ?? 0; } catch (_) {}
-      if (since == 0 && granted) {
-        since = DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch;
-        try { await _storage.write(key: kCallSinceKey, value: '$since'); } catch (_) {}
-      }
-      List<String> seen = [];
-      try { seen = List<String>.from(jsonDecode(await _storage.read(key: kCallSeenKey) ?? '[]')); } catch (_) {}
-      final fresh = <File>[];
-      for (final f in files) {
-        try {
-          final m = (await f.lastModified()).millisecondsSinceEpoch;
-          final name = f.uri.pathSegments.last;
-          if (m >= since && !seen.contains(name)) fresh.add(f);
-        } catch (_) {}
-      }
-      // ★판 279f 방금 한 통화가 먼저 — 최신부터 한 번에 10개
-      fresh.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-      int sent = 0;
-      for (final f in fresh.take(10)) {
-        // 아직 녹음 중일 수 있는 파일(1분 안에 바뀐 것)은 다음 번에
-        if (DateTime.now().difference(f.lastModifiedSync()).inSeconds < 60) continue;
-        final name = f.uri.pathSegments.last;
-        try {
-          final len = await f.length();
-          if (len > 75 * 1024 * 1024) { seen.add(name); continue; }
-          final bytes = await f.readAsBytes();
-          final r = await http.post(
-            Uri.parse('$kBaseUrl/api/inbox/call-audio'),
-            headers: {
-              'Content-Type': 'application/octet-stream',
-              'x-inbox-token': ik,
-              'x-call-file': Uri.encodeComponent(name),
-              'x-call-at': Uri.encodeComponent(f.lastModifiedSync().toUtc().toIso8601String()),
-            },
-            body: bytes,
-          ).timeout(const Duration(minutes: 5));
-          if (r.statusCode == 200) { seen.add(name); sent++; }
-        } catch (_) {}
-      }
-      if (seen.length > 600) seen = seen.sublist(seen.length - 500);
-      try { await _storage.write(key: kCallSeenKey, value: jsonEncode(seen)); } catch (_) {}
-      try {
-        await http.post(
-          Uri.parse('$kBaseUrl/api/inbox/call-status'),
-          headers: {'Content-Type': 'application/json; charset=utf-8', 'x-inbox-token': ik},
-          body: jsonEncode({'권한': granted, '폴더': folder, '파일수': files.length, '새': sent, '앱판': kAppVer}),
-        ).timeout(const Duration(seconds: 20));
-      } catch (_) {}
     } finally {
       _callBusy = false;
     }
   }
+
 
   Future<void> _ensureServiceRunning() async {
     try {
@@ -309,7 +356,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
         Uri.parse('$kBaseUrl/api/inbox/in'),
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
-          'x-inbox-token': ik,
+          'x-inbox-token': ik!,
         },
         body: jsonEncode({
           '창구': changuk,
