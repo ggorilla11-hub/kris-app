@@ -22,7 +22,7 @@ import 'package:workmanager/workmanager.dart';
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.3.7';
+const String kAppVer = '0.3.8';
 // ★판 279e LITE(교육생판)는 알림 수집이 없어 「알림 접근 허용」 띠가 영영 안 사라지던 것 — LITE 빌드에서는 띠를 안 그림
 const bool kLite = bool.fromEnvironment('KRIS_LITE');
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
@@ -109,19 +109,24 @@ Future<bool> callScanOnce({bool again = true}) async {
           try { m = (await f.lastModified()).millisecondsSinceEpoch; } catch (e) { err = 'mtime:$e'; }
           final name = f.uri.pathSegments.last;
           // ★판 279j 파일 이름의 날짜(…_251025_143012)도 봄 — 수정 시각을 못 읽어도 새 통화를 놓치지 않게
-          final mm = RegExp(r'(\d{6})_(\d{6})').firstMatch(name);
+          final mm = RegExp(r'_(\d{6})_(\d{6})(?:\D|$)').firstMatch(name);
           if (mm != null) {
             final d = mm.group(1)!, t = mm.group(2)!;
             final dt = DateTime.tryParse('20${d.substring(0, 2)}-${d.substring(2, 4)}-${d.substring(4, 6)}T${t.substring(0, 2)}:${t.substring(2, 4)}:${t.substring(4, 6)}+09:00');
-            if (dt != null && dt.millisecondsSinceEpoch > m) m = dt.millisecondsSinceEpoch;
+            if (dt != null && dt.millisecondsSinceEpoch <= DateTime.now().millisecondsSinceEpoch + 86400000) m = dt.millisecondsSinceEpoch;
           }
           if (m > newestAt) { newestAt = m; newest = name; }
           if (m >= since && !seen.contains(name)) fresh.add(f);
         } catch (e) { err = 'list:$e'; }
       }
       // ★판 279f 방금 한 통화가 먼저 — 최신부터 한 번에 10개
-      fresh.sort((a, b) => b.uri.pathSegments.last.compareTo(a.uri.pathSegments.last));
-      try { fresh.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync())); } catch (_) {}
+      // ★판 279k 방금 한 통화가 먼저 — 이름 속 날짜(없으면 수정 시각) 기준
+      int at(File f) {
+        final mm = RegExp(r'_(\d{6})_(\d{6})(?:\D|$)').firstMatch(f.uri.pathSegments.last);
+        if (mm != null) { final v = int.tryParse('${mm.group(1)}${mm.group(2)}'); if (v != null) return 20000000000000 + v; }
+        try { final d = f.lastModifiedSync(); return int.parse('${d.year % 100}'.padLeft(2, '0') + '${d.month}'.padLeft(2, '0') + '${d.day}'.padLeft(2, '0') + '${d.hour}'.padLeft(2, '0') + '${d.minute}'.padLeft(2, '0') + '${d.second}'.padLeft(2, '0')) + 20000000000000; } catch (_) { return 0; }
+      }
+      fresh.sort((a, b) => at(b).compareTo(at(a)));
       int sent = 0;
       for (final f in fresh.take(10)) {
         // 아직 녹음 중일 수 있는 파일(1분 안에 바뀐 것)은 다음 번에
