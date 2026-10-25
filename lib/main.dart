@@ -22,7 +22,7 @@ import 'package:workmanager/workmanager.dart';
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.3.6';
+const String kAppVer = '0.3.7';
 // ★판 279e LITE(교육생판)는 알림 수집이 없어 「알림 접근 허용」 띠가 영영 안 사라지던 것 — LITE 빌드에서는 띠를 안 그림
 const bool kLite = bool.fromEnvironment('KRIS_LITE');
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
@@ -102,19 +102,30 @@ Future<bool> callScanOnce({bool again = true}) async {
       List<String> seen = [];
       try { seen = List<String>.from(jsonDecode(await st.read(key: kCallSeenKey) ?? '[]')); } catch (_) {}
       final fresh = <File>[];
+      String newest = ''; int newestAt = 0; String err = ''; int fail = 0;
       for (final f in files) {
         try {
-          final m = (await f.lastModified()).millisecondsSinceEpoch;
+          int m = 0;
+          try { m = (await f.lastModified()).millisecondsSinceEpoch; } catch (e) { err = 'mtime:$e'; }
           final name = f.uri.pathSegments.last;
+          // ★판 279j 파일 이름의 날짜(…_251025_143012)도 봄 — 수정 시각을 못 읽어도 새 통화를 놓치지 않게
+          final mm = RegExp(r'(\d{6})_(\d{6})').firstMatch(name);
+          if (mm != null) {
+            final d = mm.group(1)!, t = mm.group(2)!;
+            final dt = DateTime.tryParse('20${d.substring(0, 2)}-${d.substring(2, 4)}-${d.substring(4, 6)}T${t.substring(0, 2)}:${t.substring(2, 4)}:${t.substring(4, 6)}+09:00');
+            if (dt != null && dt.millisecondsSinceEpoch > m) m = dt.millisecondsSinceEpoch;
+          }
+          if (m > newestAt) { newestAt = m; newest = name; }
           if (m >= since && !seen.contains(name)) fresh.add(f);
-        } catch (_) {}
+        } catch (e) { err = 'list:$e'; }
       }
       // ★판 279f 방금 한 통화가 먼저 — 최신부터 한 번에 10개
-      fresh.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+      fresh.sort((a, b) => b.uri.pathSegments.last.compareTo(a.uri.pathSegments.last));
+      try { fresh.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync())); } catch (_) {}
       int sent = 0;
       for (final f in fresh.take(10)) {
         // 아직 녹음 중일 수 있는 파일(1분 안에 바뀐 것)은 다음 번에
-        if (DateTime.now().difference(f.lastModifiedSync()).inSeconds < 60) continue;
+        try { if (DateTime.now().difference(f.lastModifiedSync()).inSeconds < 60) continue; } catch (_) {}
         final name = f.uri.pathSegments.last;
         try {
           final len = await f.length();
@@ -126,12 +137,11 @@ Future<bool> callScanOnce({bool again = true}) async {
               'Content-Type': 'application/octet-stream',
               'x-inbox-token': ik!,
               'x-call-file': Uri.encodeComponent(name),
-              'x-call-at': Uri.encodeComponent(f.lastModifiedSync().toUtc().toIso8601String()),
             },
             body: bytes,
           ).timeout(const Duration(minutes: 5));
-          if (r.statusCode == 200) { seen.add(name); sent++; }
-        } catch (_) {}
+          if (r.statusCode == 200) { seen.add(name); sent++; } else { fail++; err = 'http ${r.statusCode}'; }
+        } catch (e) { fail++; err = 'up:$e'; }
       }
       if (seen.length > 600) seen = seen.sublist(seen.length - 500);
       try { await st.write(key: kCallSeenKey, value: jsonEncode(seen)); } catch (_) {}
@@ -139,7 +149,9 @@ Future<bool> callScanOnce({bool again = true}) async {
         final rs = await http.post(
           Uri.parse('$kBaseUrl/api/inbox/call-status'),
           headers: {'Content-Type': 'application/json; charset=utf-8', 'x-inbox-token': ik!},
-          body: jsonEncode({'권한': granted, '폴더': folder, '파일수': files.length, '새': sent, '앱판': kAppVer}),
+          body: jsonEncode({'권한': granted, '폴더': folder, '파일수': files.length, '새': sent, '앱판': kAppVer,
+            '후보': fresh.length, '실패': fail, '오류': err.length > 160 ? err.substring(0, 160) : err,
+            '최신': newest, '최신때': newestAt, '기준때': since}),
         ).timeout(const Duration(seconds: 20));
         // ★판 279i 서버가 「처음부터 다시」라 하면(통화 리스닝이 꺼져 있던 동안 본 것으로 적힌 녹음) 지난 하루치를 다시 보냄
         try {
