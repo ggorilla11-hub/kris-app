@@ -4,7 +4,9 @@
 //  - ikey 발급: WebView에서 window.genyaIssueIkey() → 웹이 callHandler('genyaIkey','ik_…')
 //  - 알림 전송: POST /api/inbox/in  헤더 x-inbox-token:<ik_…>  본문 {창구,보낸이,본문}
 
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:ui';
 
@@ -14,10 +16,21 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_notification_listener_plus/flutter_notification_listener_plus.dart';
 import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
 
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
+const String kAppVer = '0.3.0';
+// ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
+const List<String> kCallDirs = [
+  '/storage/emulated/0/Recordings/Call',
+  '/storage/emulated/0/Recordings/통화 녹음',
+  '/storage/emulated/0/Call',
+  '/storage/emulated/0/Record/Call',
+];
+const String kCallSeenKey = 'call_seen';
+const String kCallSinceKey = 'call_since';
 
 // 수집할 앱 → 창구 이름
 String? changukOf(String? pkg) {
@@ -81,6 +94,9 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
   String? _ikey;
   bool _ikeyLoaded = false;
   bool _hasNotifPermission = true; // 배너 숨김 기본값, 실제값은 비동기로 갱신
+  bool _hasCallPermission = true; // ★판 279 통화녹음 읽기 권한
+  bool _callBusy = false;
+  Timer? _callTimer;
   DateTime? _lastIssueAt; // ikey 발급 호출 스로틀
 
   // 중복 전송 방지(최근 200건 키)
@@ -117,6 +133,109 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
     } catch (_) {}
     await _ensureServiceRunning();
     if (mounted) setState(() {});
+    // ★판 279 통화녹음 — 열 때 한 번 + 10분마다
+    _scanCalls();
+    _callTimer = Timer.periodic(const Duration(minutes: 10), (_) => _scanCalls());
+  }
+
+  // ── ★판 279 통화 리스닝: 통화녹음 폴더의 새 파일을 크리스 서버로 (서버가 글로 바꾸고 원본은 지움) ──
+  Future<bool> _callGranted() async {
+    try {
+      if (await Permission.audio.isGranted) return true;
+      if (await Permission.storage.isGranted) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  Future<void> _askCallPermission() async {
+    try {
+      var st = await Permission.audio.request();
+      if (!st.isGranted) {
+        final st2 = await Permission.storage.request();
+        if (st2.isGranted) st = st2;
+      }
+      if (!st.isGranted && (st.isPermanentlyDenied || st.isRestricted)) {
+        await openAppSettings();
+      }
+    } catch (_) {}
+    _scanCalls();
+  }
+
+  Future<void> _scanCalls() async {
+    if (_callBusy) return;
+    _callBusy = true;
+    try {
+      final granted = await _callGranted();
+      if (mounted && granted != _hasCallPermission) setState(() => _hasCallPermission = granted);
+      final ik = _ikey;
+      if (ik == null) return;
+      String folder = '';
+      List<File> files = [];
+      if (granted) {
+        for (final d in kCallDirs) {
+          final dir = Directory(d);
+          try {
+            if (!await dir.exists()) continue;
+            final list = await dir.list().where((e) => e is File).cast<File>().where((f) => RegExp(r'\.(m4a|amr|mp3|3gp|aac|wav|ogg)$', caseSensitive: false).hasMatch(f.path)).toList();
+            if (list.isEmpty && folder.isNotEmpty) continue;
+            folder = d;
+            files = list;
+            if (list.isNotEmpty) break;
+          } catch (_) {}
+        }
+      }
+      // 처음 켤 때는 지난 하루치부터
+      int since = 0;
+      try { since = int.tryParse(await _storage.read(key: kCallSinceKey) ?? '') ?? 0; } catch (_) {}
+      if (since == 0 && granted) {
+        since = DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch;
+        try { await _storage.write(key: kCallSinceKey, value: '$since'); } catch (_) {}
+      }
+      List<String> seen = [];
+      try { seen = List<String>.from(jsonDecode(await _storage.read(key: kCallSeenKey) ?? '[]')); } catch (_) {}
+      final fresh = <File>[];
+      for (final f in files) {
+        try {
+          final m = (await f.lastModified()).millisecondsSinceEpoch;
+          final name = f.uri.pathSegments.last;
+          if (m >= since && !seen.contains(name)) fresh.add(f);
+        } catch (_) {}
+      }
+      fresh.sort((a, b) => a.lastModifiedSync().compareTo(b.lastModifiedSync()));
+      int sent = 0;
+      for (final f in fresh.take(5)) {
+        // 아직 녹음 중일 수 있는 파일(1분 안에 바뀐 것)은 다음 번에
+        if (DateTime.now().difference(f.lastModifiedSync()).inSeconds < 60) continue;
+        final name = f.uri.pathSegments.last;
+        try {
+          final len = await f.length();
+          if (len > 75 * 1024 * 1024) { seen.add(name); continue; }
+          final bytes = await f.readAsBytes();
+          final r = await http.post(
+            Uri.parse('$kBaseUrl/api/inbox/call-audio'),
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'x-inbox-token': ik,
+              'x-call-file': Uri.encodeComponent(name),
+              'x-call-at': Uri.encodeComponent(f.lastModifiedSync().toUtc().toIso8601String()),
+            },
+            body: bytes,
+          ).timeout(const Duration(minutes: 5));
+          if (r.statusCode == 200) { seen.add(name); sent++; }
+        } catch (_) {}
+      }
+      if (seen.length > 600) seen = seen.sublist(seen.length - 500);
+      try { await _storage.write(key: kCallSeenKey, value: jsonEncode(seen)); } catch (_) {}
+      try {
+        await http.post(
+          Uri.parse('$kBaseUrl/api/inbox/call-status'),
+          headers: {'Content-Type': 'application/json; charset=utf-8', 'x-inbox-token': ik},
+          body: jsonEncode({'권한': granted, '폴더': folder, '파일수': files.length, '새': sent, '앱판': kAppVer}),
+        ).timeout(const Duration(seconds: 20));
+      } catch (_) {}
+    } finally {
+      _callBusy = false;
+    }
   }
 
   Future<void> _ensureServiceRunning() async {
@@ -142,6 +261,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
       _ensureServiceRunning().then((_) {
         if (mounted) setState(() {});
       });
+      _scanCalls();
     }
   }
 
@@ -153,6 +273,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
     } catch (_) {}
     _ikey = ik;
     if (mounted) setState(() {});
+    _scanCalls();
   }
 
   // 알림 1건 처리 → 서버 전송
@@ -225,6 +346,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _callTimer?.cancel();
     IsolateNameServer.removePortNameMapping(kPortName);
     _port.close();
     super.dispose();
@@ -243,6 +365,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
         body: SafeArea(
           child: Column(
             children: [
+              if (!_hasCallPermission) _callBanner(),
               if (!_hasNotifPermission) _permissionBanner(),
               if (_progress < 1.0)
                 LinearProgressIndicator(
@@ -307,6 +430,31 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
                   onReceivedError: (c, req, err) => _pull?.endRefreshing(),
                 ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _callBanner() {
+    return Material(
+      color: const Color(0xFFFDE68A),
+      child: InkWell(
+        onTap: _askCallPermission,
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(Icons.phone_in_talk, color: Color(0xFF0C162E), size: 20),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '통화 녹음 읽기 허용 — 고객 통화를 크리스가 글로 정리해 소식함에 넣어요 (눌러서 허용)',
+                  style: TextStyle(color: Color(0xFF0C162E), fontWeight: FontWeight.w700, fontSize: 13),
+                ),
+              ),
+              Icon(Icons.chevron_right, color: Color(0xFF0C162E)),
             ],
           ),
         ),
