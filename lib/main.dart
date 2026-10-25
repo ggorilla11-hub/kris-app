@@ -22,7 +22,7 @@ import 'package:workmanager/workmanager.dart';
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.3.8';
+const String kAppVer = '0.3.9';
 // ★판 279e LITE(교육생판)는 알림 수집이 없어 「알림 접근 허용」 띠가 영영 안 사라지던 것 — LITE 빌드에서는 띠를 안 그림
 const bool kLite = bool.fromEnvironment('KRIS_LITE');
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
@@ -70,6 +70,18 @@ Future<bool> callScanGranted() async {
   }
 }
 
+// 갤럭시 통화녹음 이름 속 날짜 → ms (KST). 「이호원_251025_1650.m4a」「01012345678_20251025_165012」「…_251025165012」
+int? callNameAt(String name) {
+  final b = name.replaceAll(RegExp(r'\.[A-Za-z0-9]+$'), '');
+  final mm = RegExp(r'[_\s-]((?:20)?\d{6})[_\s-]?(\d{4}|\d{6})$').firstMatch(b);
+  if (mm == null) return null;
+  var d = mm.group(1)!; if (d.length == 6) d = '20$d';
+  final t = (mm.group(2)! + '00').substring(0, 6);
+  final dt = DateTime.tryParse('${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}T${t.substring(0, 2)}:${t.substring(2, 4)}:${t.substring(4, 6)}+09:00');
+  if (dt == null || dt.year < 2015) return null;
+  return dt.millisecondsSinceEpoch;
+}
+
 Future<bool> callScanOnce({bool again = true}) async {
   const st = FlutterSecureStorage();
   final granted = await callScanGranted();
@@ -80,17 +92,30 @@ Future<bool> callScanOnce({bool again = true}) async {
       String folder = '';
       List<File> files = [];
       if (granted) {
-        for (final d in kCallDirs) {
-          final dir = Directory(d);
+        // ★판 279l 통화녹음 폴더를 ★전부 모음 — 첫 폴더만 보던 것(옛 폴더에 갇혀 오늘 통화를 못 봄)
+        final dirs = <String>{...kCallDirs};
+        for (final root in ['/storage/emulated/0/Recordings', '/storage/emulated/0/Sounds', '/storage/emulated/0/Music', '/storage/emulated/0/Record']) {
           try {
-            if (!await dir.exists()) continue;
-            final list = await dir.list().where((e) => e is File).cast<File>().where((f) => RegExp(r'\.(m4a|amr|mp3|3gp|aac|wav|ogg)$', caseSensitive: false).hasMatch(f.path)).toList();
-            if (list.isEmpty && folder.isNotEmpty) continue;
-            folder = d;
-            files = list;
-            if (list.isNotEmpty) break;
+            final rd = Directory(root);
+            if (!await rd.exists()) continue;
+            await for (final e in rd.list(recursive: true, followLinks: false)) {
+              if (e is Directory && RegExp(r'(call|통화)', caseSensitive: false).hasMatch(e.path.split('/').last)) dirs.add(e.path);
+            }
           } catch (_) {}
         }
+        final names = <String>{};
+        final used = <String>[];
+        for (final d in dirs) {
+          try {
+            final dir = Directory(d);
+            if (!await dir.exists()) continue;
+            final list = await dir.list().where((e) => e is File).cast<File>().where((f) => RegExp(r'\.(m4a|amr|mp3|3gp|aac|wav|ogg)$', caseSensitive: false).hasMatch(f.path)).toList();
+            if (list.isEmpty) continue;
+            used.add('${d.replaceFirst('/storage/emulated/0/', '')}(${list.length})');
+            for (final f in list) { if (names.add(f.uri.pathSegments.last)) files.add(f); }
+          } catch (_) {}
+        }
+        folder = used.join(', ');
       }
       // 처음 켤 때는 지난 하루치부터
       int since = 0;
@@ -109,24 +134,18 @@ Future<bool> callScanOnce({bool again = true}) async {
           try { m = (await f.lastModified()).millisecondsSinceEpoch; } catch (e) { err = 'mtime:$e'; }
           final name = f.uri.pathSegments.last;
           // ★판 279j 파일 이름의 날짜(…_251025_143012)도 봄 — 수정 시각을 못 읽어도 새 통화를 놓치지 않게
-          final mm = RegExp(r'_(\d{6})_(\d{6})(?:\D|$)').firstMatch(name);
-          if (mm != null) {
-            final d = mm.group(1)!, t = mm.group(2)!;
-            final dt = DateTime.tryParse('20${d.substring(0, 2)}-${d.substring(2, 4)}-${d.substring(4, 6)}T${t.substring(0, 2)}:${t.substring(2, 4)}:${t.substring(4, 6)}+09:00');
-            if (dt != null && dt.millisecondsSinceEpoch <= DateTime.now().millisecondsSinceEpoch + 86400000) m = dt.millisecondsSinceEpoch;
-          }
+          final mm = callNameAt(name);
+          if (mm != null && mm <= DateTime.now().millisecondsSinceEpoch + 86400000) m = mm;
           if (m > newestAt) { newestAt = m; newest = name; }
           if (m >= since && !seen.contains(name)) fresh.add(f);
         } catch (e) { err = 'list:$e'; }
       }
       // ★판 279f 방금 한 통화가 먼저 — 최신부터 한 번에 10개
       // ★판 279k 방금 한 통화가 먼저 — 이름 속 날짜(없으면 수정 시각) 기준
-      int at(File f) {
-        final mm = RegExp(r'_(\d{6})_(\d{6})(?:\D|$)').firstMatch(f.uri.pathSegments.last);
-        if (mm != null) { final v = int.tryParse('${mm.group(1)}${mm.group(2)}'); if (v != null) return 20000000000000 + v; }
-        try { final d = f.lastModifiedSync(); return int.parse('${d.year % 100}'.padLeft(2, '0') + '${d.month}'.padLeft(2, '0') + '${d.day}'.padLeft(2, '0') + '${d.hour}'.padLeft(2, '0') + '${d.minute}'.padLeft(2, '0') + '${d.second}'.padLeft(2, '0')) + 20000000000000; } catch (_) { return 0; }
-      }
-      fresh.sort((a, b) => at(b).compareTo(at(a)));
+      // ★판 279l 사람 이름이 적힌 통화(저장된 연락처)부터, 그 안에서 최신부터 — 카톡·메일처럼
+      int at(File f) { final v = callNameAt(f.uri.pathSegments.last); if (v != null) return v; try { return f.lastModifiedSync().millisecondsSinceEpoch; } catch (_) { return 0; } }
+      bool named(File f) { final b = f.uri.pathSegments.last.replaceAll(RegExp(r'\.[A-Za-z0-9]+$'), '').replaceAll(RegExp(r'^(통화\s*녹음|call\s*recording)\s*', caseSensitive: false), ''); return RegExp(r'[가-힣A-Za-z]').hasMatch(b.split('_').first); }
+      fresh.sort((a, b) { final na = named(a), nb = named(b); if (na != nb) return na ? -1 : 1; return at(b).compareTo(at(a)); });
       int sent = 0;
       for (final f in fresh.take(10)) {
         // 아직 녹음 중일 수 있는 파일(1분 안에 바뀐 것)은 다음 번에
@@ -156,7 +175,8 @@ Future<bool> callScanOnce({bool again = true}) async {
           headers: {'Content-Type': 'application/json; charset=utf-8', 'x-inbox-token': ik!},
           body: jsonEncode({'권한': granted, '폴더': folder, '파일수': files.length, '새': sent, '앱판': kAppVer,
             '후보': fresh.length, '실패': fail, '오류': err.length > 160 ? err.substring(0, 160) : err,
-            '최신': newest, '최신때': newestAt, '기준때': since}),
+            '최신': newest, '최신때': newestAt, '기준때': since,
+            '앞': fresh.take(3).map((f) => f.uri.pathSegments.last).join(' | ')}),
         ).timeout(const Duration(seconds: 20));
         // ★판 279i 서버가 「처음부터 다시」라 하면(통화 리스닝이 꺼져 있던 동안 본 것으로 적힌 녹음) 지난 하루치를 다시 보냄
         try {
