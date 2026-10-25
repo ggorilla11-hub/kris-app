@@ -21,7 +21,7 @@ import 'package:permission_handler/permission_handler.dart';
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.3.1';
+const String kAppVer = '0.3.2';
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
 const List<String> kCallDirs = [
   '/storage/emulated/0/Recordings/Call',

@@ -116,6 +116,15 @@ jobs:
           cp keys/kris-sign.keystore ~/.android/debug.keystore
           keytool -list -keystore ~/.android/debug.keystore -storepass android | grep -i "SHA" | head -1 || true
 
+      - name: 서명 열쇠를 gradle 에 직접 지정 (★판 279d — ~/.android 복사만으로는 안 먹어 빌드마다 서명이 달랐음)
+        run: |
+          if [ -f android/app/build.gradle.kts ]; then
+            printf '\nandroid {\n  signingConfigs {\n    getByName("debug") {\n      storeFile = rootProject.file("../keys/kris-sign.keystore")\n      storePassword = "android"\n      keyAlias = "androiddebugkey"\n      keyPassword = "android"\n    }\n  }\n}\n' >> android/app/build.gradle.kts
+          else
+            printf '\nandroid {\n  signingConfigs {\n    debug {\n      storeFile rootProject.file("../keys/kris-sign.keystore")\n      storePassword "android"\n      keyAlias "androiddebugkey"\n      keyPassword "android"\n    }\n  }\n}\n' >> android/app/build.gradle
+          fi
+          tail -12 android/app/build.gradle* 
+
       - name: 의존성 받기
         run: flutter pub get
 
@@ -125,6 +134,14 @@ jobs:
         run: |
           set -o pipefail
           flutter build apk --release 2>&1 | tee /tmp/build.log
+
+      - name: 서명 확인 (열쇠와 다르면 실패)
+        if: steps.build.outcome == 'success'
+        run: |
+          WANT=$(keytool -list -v -keystore keys/kris-sign.keystore -storepass android | grep -m1 'SHA256:' | awk '{print $2}')
+          GOT=$(keytool -printcert -jarfile build/app/outputs/flutter-apk/app-release.apk | grep -m1 'SHA256:' | awk '{print $2}')
+          echo "열쇠 $WANT"; echo "APK  $GOT"
+          [ "$WANT" = "$GOT" ] || { echo "::error::서명이 고정 열쇠와 다릅니다"; exit 1; }
 
       - name: 빌드 로그 업로드
         if: always()
