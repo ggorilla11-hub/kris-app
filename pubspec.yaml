@@ -1,7 +1,7 @@
 name: kris_app
 description: "크리스 — 보험설계사 AI 비서 네이티브 앱 (기존 크리스 웹을 WebView로 띄우고, 폰 알림·통화·메일을 수집)"
 publish_to: 'none'
-version: 0.3.2+6
+version: 0.3.3+7
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

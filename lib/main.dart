@@ -21,7 +21,9 @@ import 'package:permission_handler/permission_handler.dart';
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.3.2';
+const String kAppVer = '0.3.3';
+// ★판 279e LITE(교육생판)는 알림 수집이 없어 「알림 접근 허용」 띠가 영영 안 사라지던 것 — LITE 빌드에서는 띠를 안 그림
+const bool kLite = bool.fromEnvironment('KRIS_LITE');
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
 const List<String> kCallDirs = [
   '/storage/emulated/0/Recordings/Call',
@@ -366,7 +368,7 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
           child: Column(
             children: [
               if (!_hasCallPermission) _callBanner(),
-              if (!_hasNotifPermission) _permissionBanner(),
+              if (!kLite && !_hasNotifPermission) _permissionBanner(),
               if (_progress < 1.0)
                 LinearProgressIndicator(
                   value: _progress == 0 ? null : _progress,
