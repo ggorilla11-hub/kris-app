@@ -70,6 +70,7 @@ jobs:
           add_perm android.permission.READ_MEDIA_AUDIO
           add_perm android.permission.READ_EXTERNAL_STORAGE
           add_perm android.permission.SEND_SMS
+          add_perm android.permission.READ_CONTACTS
           sed -i 's#android:label="[^"]*"#android:label="크리스"#' "$MF"
           # ★알림 읽기 서비스(NotificationListenerService) 선언 — ★이게 있어야 "알림 접근 허용" 목록에 크리스가 뜬다 (2026-10-17 팀장)
           grep -q NotificationsHandlerService "$MF" || sed -i 's#</application>#    <service android:name="com.akhilg.flutter_notification_listener_plus.NotificationsHandlerService" android:label="크리스 알림 수집" android:exported="true" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="customer-message-collection"/><intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter></service></application>#' "$MF"

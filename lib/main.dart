@@ -22,7 +22,7 @@ import 'package:workmanager/workmanager.dart';
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.4.0';
+const String kAppVer = '0.5.0';
 // ★판 279e LITE(교육생판)는 알림 수집이 없어 「알림 접근 허용」 띠가 영영 안 사라지던 것 — LITE 빌드에서는 띠를 안 그림
 const bool kLite = bool.fromEnvironment('KRIS_LITE');
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
@@ -575,6 +575,29 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
                           _saveIkey(args[0].toString());
                         }
                         return {'ok': true};
+                      },
+                    );
+                    // ★판 394 M5 — 웹 「크리스 앱에서 바로 가져오기」 → 연락처 권한 → 폰 연락처를 크리스로(설계사가 「네」 해야 등록)
+                    c.addJavaScriptHandler(
+                      handlerName: 'krisContacts',
+                      callback: (args) async {
+                        try {
+                          var st = await Permission.contacts.status;
+                          if (!st.isGranted) st = await Permission.contacts.request();
+                          if (!st.isGranted) return {'ok': false, 'err': '연락처 권한을 허용해 주셔야 가져올 수 있습니다(설정 → 앱 → 크리스 → 권한 → 연락처).'};
+                          final x = await kSmsCh.invokeMethod('contacts');
+                          final m = (x is Map) ? Map<String, dynamic>.from(x) : <String, dynamic>{};
+                          if (m['ok'] != true) return {'ok': false, 'err': '${m['err'] ?? '연락처를 읽지 못했습니다'}'};
+                          final ik = _ikey;
+                          if (ik == null) return {'ok': false, 'err': '크리스 앱 연결 열쇠가 아직 없습니다. 잠시 뒤 다시 눌러 주세요.'};
+                          final r = await http.post(Uri.parse('$kBaseUrl/api/phone/contacts'),
+                              headers: {'Content-Type': 'application/json; charset=utf-8', 'x-inbox-token': ik},
+                              body: jsonEncode({'연락처': m['연락처'] ?? []})).timeout(const Duration(seconds: 60));
+                          final j = jsonDecode(utf8.decode(r.bodyBytes));
+                          return (j is Map) ? j : {'ok': false, 'err': '서버 답을 읽지 못했습니다'};
+                        } catch (e) {
+                          return {'ok': false, 'err': '연락처 보내기 실패: $e'};
+                        }
                       },
                     );
                     // ★판 298 웹에서 「발송해」 뒤 바로 폰 문자 보내기

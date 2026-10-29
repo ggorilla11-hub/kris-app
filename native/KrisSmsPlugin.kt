@@ -43,8 +43,41 @@ class KrisSmsPlugin : FlutterPlugin, MethodCallHandler {
     when (call.method) {
       "granted" -> result.success(granted())
       "send" -> send(call.argument<String>("to") ?: "", call.argument<String>("body") ?: "", result)
+      "contactsGranted" -> result.success(ctx.checkSelfPermission(android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED)
+      "contacts" -> Thread { val r = contacts(); Handler(Looper.getMainLooper()).post { result.success(r) } }.start()
       else -> result.notImplemented()
     }
+  }
+
+  // ★판 394 M5 — 폰 연락처 읽기(READ_CONTACTS). 이름·전화·메일·생일·회사·직함·메모만. 사진·통화기록은 안 읽음. 최대 20000명.
+  private fun contacts(): Map<String, Any> {
+    if (ctx.checkSelfPermission(android.Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED)
+      return mapOf("ok" to false, "err" to "연락처 권한이 없습니다")
+    val by = LinkedHashMap<Long, MutableMap<String, Any>>()
+    val phones = HashMap<Long, ArrayList<String>>()
+    val mails = HashMap<Long, ArrayList<String>>()
+    try {
+      val cr = ctx.contentResolver
+      val uri = android.provider.ContactsContract.Data.CONTENT_URI
+      val cols = arrayOf(android.provider.ContactsContract.Data.CONTACT_ID, android.provider.ContactsContract.Data.DISPLAY_NAME, android.provider.ContactsContract.Data.MIMETYPE,
+        android.provider.ContactsContract.Data.DATA1, android.provider.ContactsContract.Data.DATA2, android.provider.ContactsContract.Data.DATA4)
+      cr.query(uri, cols, null, null, null)?.use { c ->
+        while (c.moveToNext()) {
+          val id = c.getLong(0); val nm = c.getString(1) ?: continue; val mt = c.getString(2) ?: ""; val d1 = c.getString(3) ?: ""; val d2 = c.getInt(4); val d4 = c.getString(5) ?: ""
+          if (!by.containsKey(id) && by.size >= 20000) continue
+          val m = by.getOrPut(id) { mutableMapOf<String, Any>("이름" to nm) }
+          when (mt) {
+            android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE -> phones.getOrPut(id) { ArrayList() }.add(d1)
+            android.provider.ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> mails.getOrPut(id) { ArrayList() }.add(d1)
+            android.provider.ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE -> if (d2 == android.provider.ContactsContract.CommonDataKinds.Event.TYPE_BIRTHDAY) m["생일"] = d1
+            android.provider.ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE -> { if (d1.isNotBlank()) m["회사"] = d1; if (d4.isNotBlank()) m["직함"] = d4 }
+            android.provider.ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE -> if (d1.isNotBlank()) m["메모"] = d1.take(120)
+          }
+        }
+      }
+    } catch (e: Exception) { return mapOf("ok" to false, "err" to (e.message ?: "연락처를 읽지 못했습니다")) }
+    for ((id, m) in by) { m["전화"] = phones[id] ?: ArrayList<String>(); m["메일"] = mails[id] ?: ArrayList<String>() }
+    return mapOf("ok" to true, "연락처" to ArrayList(by.values))
   }
 
   private fun send(to: String, body: String, result: Result) {
