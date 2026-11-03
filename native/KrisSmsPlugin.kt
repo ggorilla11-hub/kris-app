@@ -45,8 +45,36 @@ class KrisSmsPlugin : FlutterPlugin, MethodCallHandler {
       "send" -> send(call.argument<String>("to") ?: "", call.argument<String>("body") ?: "", result)
       "contactsGranted" -> result.success(ctx.checkSelfPermission(android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED)
       "contacts" -> Thread { val r = contacts(); Handler(Looper.getMainLooper()).post { result.success(r) } }.start()
+      // ★판 500 카톡으로 보내기 · PDF 열기(앱 안 WebView 는 공유창·PDF 를 못 띄워 안드로이드에 맡김)
+      "share" -> result.success(share(call.argument<String>("text") ?: "", call.argument<Boolean>("kakao") ?: false))
+      "open" -> result.success(open(call.argument<String>("url") ?: ""))
       else -> result.notImplemented()
     }
+  }
+
+  private fun share(text: String, kakao: Boolean): Map<String, Any> {
+    val base = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, text) }
+    if (kakao) {
+      try {
+        val k = Intent(base).apply { setPackage("com.kakao.talk"); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        ctx.startActivity(k)
+        return mapOf("ok" to true, "kakao" to true)
+      } catch (e: Exception) {}
+    }
+    return try {
+      val go = Intent.createChooser(base, "보내기").apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+      ctx.startActivity(go)
+      mapOf("ok" to true, "kakao" to false)
+    } catch (e: Exception) { mapOf("ok" to false, "err" to (e.message ?: "공유창을 열지 못했습니다")) }
+  }
+
+  private fun open(url: String): Map<String, Any> {
+    if (!url.startsWith("https://")) return mapOf("ok" to false, "err" to "https 주소만 엽니다")
+    return try {
+      val i = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+      ctx.startActivity(i)
+      mapOf("ok" to true)
+    } catch (e: Exception) { mapOf("ok" to false, "err" to (e.message ?: "열지 못했습니다")) }
   }
 
   // ★판 394 M5 — 폰 연락처 읽기(READ_CONTACTS). 이름·전화·메일·생일·회사·직함·메모만. 사진·통화기록은 안 읽음. 최대 20000명.

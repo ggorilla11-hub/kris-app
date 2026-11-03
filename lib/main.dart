@@ -22,7 +22,7 @@ import 'package:workmanager/workmanager.dart';
 const String kBaseUrl = 'https://genya-pwa.onrender.com';
 const String kPortName = '_kris_listener_';
 const String kIkeyKey = 'genya_ikey';
-const String kAppVer = '0.5.0';
+const String kAppVer = '0.5.1';
 // ★판 279e LITE(교육생판)는 알림 수집이 없어 「알림 접근 허용」 띠가 영영 안 사라지던 것 — LITE 빌드에서는 띠를 안 그림
 const bool kLite = bool.fromEnvironment('KRIS_LITE');
 // ★판 279 통화 리스닝 — 갤럭시 「통화 자동 녹음」 폴더
@@ -600,6 +600,32 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
                         }
                       },
                     );
+                    // ★판 500 웹 공유판 「📱 카톡 앱으로」 · PDF 저장/인쇄 — 안드로이드 공유창(카카오톡)·브라우저로
+                    c.addJavaScriptHandler(
+                      handlerName: 'krisShare',
+                      callback: (args) async {
+                        try {
+                          final t = args.isNotEmpty ? '${args[0] ?? ''}' : '';
+                          final k = args.length > 1 && args[1] == true;
+                          final x = await kSmsCh.invokeMethod('share', {'text': t, 'kakao': k});
+                          return (x is Map) ? Map<String, dynamic>.from(x) : {'ok': false};
+                        } catch (e) {
+                          return {'ok': false, 'err': '$e'};
+                        }
+                      },
+                    );
+                    c.addJavaScriptHandler(
+                      handlerName: 'krisOpen',
+                      callback: (args) async {
+                        try {
+                          final u = args.isNotEmpty ? '${args[0] ?? ''}' : '';
+                          final x = await kSmsCh.invokeMethod('open', {'url': u});
+                          return (x is Map) ? Map<String, dynamic>.from(x) : {'ok': false};
+                        } catch (e) {
+                          return {'ok': false, 'err': '$e'};
+                        }
+                      },
+                    );
                     // ★판 298 웹에서 「발송해」 뒤 바로 폰 문자 보내기
                     c.addJavaScriptHandler(
                       handlerName: 'krisSmsNow',
@@ -608,6 +634,12 @@ class _WebShellState extends State<WebShell> with WidgetsBindingObserver {
                         return {'ok': true};
                       },
                     );
+                  },
+                  // ★판 500 앱 안에서 PDF·파일 받기를 누르면 아무 일도 없던 것 → 폰 브라우저로(크롬이 받아 보여 줌)
+                  onDownloadStartRequest: (c, req) async {
+                    try {
+                      await kSmsCh.invokeMethod('open', {'url': req.url.toString()});
+                    } catch (_) {}
                   },
                   onLoadStop: (c, url) async {
                     _pull?.endRefreshing();
